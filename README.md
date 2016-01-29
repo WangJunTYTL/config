@@ -3,6 +3,9 @@ Configuration library for JVM languages.
 [![Maven Central](https://maven-badges.herokuapp.com/maven-central/com.typesafe/config/badge.svg)](https://maven-badges.herokuapp.com/maven-central/com.typesafe/config)
 [![Build Status](https://travis-ci.org/typesafehub/config.svg?branch=master)](https://travis-ci.org/typesafehub/config)
 
+If you have questions or are working on a pull request or just
+curious, please feel welcome to join the chat room:
+[![Join chat https://gitter.im/typesafehub/config](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/typesafehub/config?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 ## Overview
 
@@ -40,7 +43,7 @@ to merge it in.
 
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-**Table of Contents**  *generated with [DocToc](http://doctoc.herokuapp.com/)*
+**Table of Contents**  *generated with [DocToc](https://github.com/thlorenz/doctoc)*
 
 - [Essential Information](#essential-information)
   - [License](#license)
@@ -55,9 +58,11 @@ to merge it in.
   - [Immutability](#immutability)
   - [Schemas and Validation](#schemas-and-validation)
   - [Standard behavior](#standard-behavior)
+    - [Note about resolving substitutions in `reference.conf` and `application.conf`](#note-about-resolving-substitutions-in-referenceconf-and-applicationconf)
   - [Merging config trees](#merging-config-trees)
   - [How to handle defaults](#how-to-handle-defaults)
   - [Understanding `Config` and `ConfigObject`](#understanding-config-and-configobject)
+  - [ConfigBeanFactory](#configbeanfactory)
 - [Using HOCON, the JSON Superset](#using-hocon-the-json-superset)
   - [Features of HOCON](#features-of-hocon)
   - [Examples of HOCON](#examples-of-hocon)
@@ -66,13 +71,19 @@ to merge it in.
     - [Inheritance](#inheritance)
     - [Optional system or env variable overrides](#optional-system-or-env-variable-overrides)
   - [Concatenation](#concatenation)
+  - [`reference.conf` can't refer to `application.conf`](#referenceconf-cant-refer-to-applicationconf)
 - [Miscellaneous Notes](#miscellaneous-notes)
   - [Debugging Your Configuration](#debugging-your-configuration)
-  - [Supports Java 6 and Later](#supports-java-6-and-later)
+  - [Supports Java 8 and Later](#supports-java-8-and-later)
   - [Rationale for Supported File Formats](#rationale-for-supported-file-formats)
   - [Other APIs (Wrappers and Ports)](#other-apis-wrappers-and-ports)
     - [Scala wrappers for the Java library](#scala-wrappers-for-the-java-library)
+    - [Clojure wrappers for the Java library](#clojure-wrappers-for-the-java-library)
     - [Ruby port](#ruby-port)
+    - [Puppet module](#puppet-module)
+    - [Python port](#python-port)
+    - [C++ port](#c++-port)
+
 
 <!-- END doctoc generated TOC please keep comment here to allow auto update -->
 
@@ -84,18 +95,20 @@ The license is Apache 2.0, see LICENSE-2.0.txt.
 
 ### Binary Releases
 
-You can find published releases (compiled for Java 6 and above) on
-Maven Central.
+Version 1.2.1 and earlier were built for Java 6, while newer
+versions (1.3.0 and above) will be built for Java 8.
+
+You can find published releases on Maven Central.
 
     <dependency>
         <groupId>com.typesafe</groupId>
         <artifactId>config</artifactId>
-        <version>1.2.1</version>
+        <version>1.3.0</version>
     </dependency>
 
 sbt dependency:
 
-    libraryDependencies += "com.typesafe" % "config" % "1.2.1"
+    libraryDependencies += "com.typesafe" % "config" % "1.3.0"
 
 Link for direct download if you don't use a dependency manager:
 
@@ -124,6 +137,10 @@ Before we can accept pull requests, you will need to agree to the
 Typesafe Contributor License Agreement online, using your GitHub
 account - it takes 30 seconds.  You can do this at
 http://www.typesafe.com/contribute/cla
+
+Please see
+[CONTRIBUTING](https://github.com/typesafehub/config/blob/master/CONTRIBUTING.md)
+for more including how to make a release.
 
 ### Build
 
@@ -247,6 +264,36 @@ configuration. In the replacement config file, you can use
 file; after the include statement you could go on to override
 certain settings.
 
+If you set `config.resource`, `config.file`, or `config.url`
+on-the-fly from inside your program (for example with
+`System.setProperty()`), be aware that `ConfigFactory` has some
+internal caches and may not see new values for system
+properties. Use `ConfigFactory.invalidateCaches()` to force-reload
+system properties.
+
+#### Note about resolving substitutions in `reference.conf` and `application.conf`
+
+The substitution syntax `${foo.bar}` will be resolved
+twice. First, all the `reference.conf` files are merged and then
+the result gets resolved. Second, all the `application.conf` are
+layered over the `reference.conf` and the result of that gets
+resolved again.
+
+The implication of this is that the `reference.conf` stack has to
+be self-contained; you can't leave an undefined value `${foo.bar}`
+to be provided by `application.conf`, or refer to `${foo.bar}` in
+a way that you want to allow `application.conf` to
+override. However, `application.conf` can refer to a `${foo.bar}`
+in `reference.conf`.
+
+This can be frustrating at times, but possible workarounds
+include:
+
+  * putting an `application.conf` in a library jar, alongside the
+`reference.conf`, with values intended for later resolution.
+  * putting some logic in code instead of building up values in the
+    config itself.
+
 ### Merging config trees
 
 Any two Config objects can be merged with an associative operation
@@ -329,6 +376,10 @@ options:
  `Config`; `ConfigObject` implements `java.util.Map<String,?>` and
  the `get()` method on `Map` returns null for missing keys. See
  the API docs for more detail on `Config` vs. `ConfigObject`.
+ 6. Set the setting to `null` in `reference.conf`, then use
+ `Config.getIsNull` and `Config.hasPathOrNull` to handle `null`
+ in a special way while still throwing an exception if the setting
+ is entirely absent.
 
 The *recommended* path (for most cases, in most apps) is that you
 require all settings to be present in either `reference.conf` or
@@ -428,6 +479,22 @@ using
 and
 [ConfigObject.toConfig()](http://typesafehub.github.io/config/latest/api/com/typesafe/config/ConfigObject.html#toConfig%28%29).
 
+### ConfigBeanFactory
+
+As of version 1.3.0, if you have a Java object that follows
+JavaBean conventions (zero-args constructor, getters and setters),
+you can automatically initialize it from a `Config`.
+
+Use
+`ConfigBeanFactory.create(config.getConfig("subtree-that-matches-bean"),
+MyBean.class)` to do this.
+
+Creating a bean from a `Config` automatically validates that the
+config matches the bean's implied schema. Bean fields can be
+primitive types, typed lists such as `List<Integer>`,
+`java.time.Duration`, `ConfigMemorySize`, or even a raw `Config`,
+`ConfigObject`, or `ConfigValue` (if you'd like to deal with a
+particular value manually).
 
 ## Using HOCON, the JSON Superset
 
@@ -669,6 +736,14 @@ concatenation, but not object/array concatenation. `+=` does not
 work in Play/Akka 2.0 either. Post-2.0 versions support these
 features.
 
+### `reference.conf` can't refer to `application.conf`
+
+Please see <a
+href="#note-about-resolving-substitutions-in-referenceconf-and-applicationconf">this
+earlier section</a>; all `reference.conf` have substitutions
+resolved first, without `application.conf` in the stack, so the
+reference stack has to be self-contained.
+
 ## Miscellaneous Notes
 
 ### Debugging Your Configuration
@@ -682,10 +757,18 @@ If you have trouble with your configuration, some useful tips.
  - Use `myConfig.root().render()` to get a `Config` printed out as a
    string with comments showing where each value came from.
 
-### Supports Java 6 and Later
+### Supports Java 8 and Later
 
-Currently the library is maintained against Java 6. It does not
-build with Java 5.
+Currently the library is maintained against Java 8, but
+version 1.2.1 and earlier will work with Java 6.
+
+Please use 1.2.1 if you need Java 6 support, though some people
+have expressed interest in a branch off of 1.3.0 supporting
+Java 7. If you want to work on that branch you might bring it up
+on [chat](https://gitter.im/typesafehub/config). We can release a
+jar for Java 7 if someone(s) steps up to maintain the branch. The
+master branch does not use Java 8 "gratuitously" but some APIs
+that use Java 8 types will need to be removed.
 
 ### Rationale for Supported File Formats
 
@@ -739,17 +822,38 @@ your wrapper, just send a pull request for this README. We would
 love to know what you're doing with this library or with the HOCON
 format.
 
+#### Guice integration
+  * Typesafe Config Guice https://github.com/racc/typesafeconfig-guice
+
+#### Java (yep!) wrappers for the Java library
+
+  * tscfg https://github.com/carueda/tscfg
+
 #### Scala wrappers for the Java library
 
   * Ficus https://github.com/ceedubs/ficus
   * configz https://github.com/arosien/configz
   * configs https://github.com/kxbmap/configs
-  * connfig-annotation https://github.com/wacai/config-annotation
+  * config-annotation https://github.com/wacai/config-annotation
+  * PureConfig https://github.com/melrief/pureconfig
+
+#### Clojure wrappers for the Java library
+
+  * beamly-core.config https://github.com/beamly/beamly-core.config
 
 #### Ruby port
 
-   * https://github.com/cprice404/ruby-hocon
+   * https://github.com/puppetlabs/ruby-hocon
+
+#### Puppet module
+
+   * Manage your HOCON configuration files with Puppet!: https://forge.puppetlabs.com/puppetlabs/hocon
 
 #### Python port
 
    * pyhocon https://github.com/chimpler/pyhocon
+
+#### C++ port
+
+   * https://github.com/puppetlabs/cpp-hocon
+

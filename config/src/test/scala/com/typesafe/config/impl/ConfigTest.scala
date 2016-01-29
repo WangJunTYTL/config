@@ -5,21 +5,11 @@ package com.typesafe.config.impl
 
 import org.junit.Assert._
 import org.junit._
-import com.typesafe.config.ConfigValue
-import com.typesafe.config.Config
-import com.typesafe.config.ConfigObject
-import com.typesafe.config.ConfigException
+import com.typesafe.config._
 import java.util.concurrent.TimeUnit
 import scala.collection.JavaConverters._
 import com.typesafe.config.ConfigResolveOptions
-import java.io.File
 import java.util.concurrent.TimeUnit.{ SECONDS, NANOSECONDS, MICROSECONDS, MILLISECONDS, MINUTES, DAYS, HOURS }
-import com.typesafe.config.ConfigParseOptions
-import com.typesafe.config.ConfigFactory
-import com.typesafe.config.ConfigMergeable
-import com.typesafe.config.ConfigRenderOptions
-import com.typesafe.config.ConfigSyntax
-import com.typesafe.config.ConfigValueFactory
 
 class ConfigTest extends TestUtils {
 
@@ -565,6 +555,8 @@ class ConfigTest extends TestUtils {
         assertEquals(42L, conf.getLong("ints.fortyTwoAgain"))
         assertEquals(42.1, conf.getDouble("floats.fortyTwoPointOne"), 1e-6)
         assertEquals(42.1, conf.getDouble("floats.fortyTwoPointOneAgain"), 1e-6)
+        assertEquals(0.33, conf.getDouble("floats.pointThirtyThree"), 1e-6)
+        assertEquals(0.33, conf.getDouble("floats.pointThirtyThreeAgain"), 1e-6)
         assertEquals("abcd", conf.getString("strings.abcd"))
         assertEquals("abcd", conf.getString("strings.abcdAgain"))
         assertEquals("null bar 42 baz true 3.14 hi", conf.getString("strings.concatenated"))
@@ -613,6 +605,9 @@ class ConfigTest extends TestUtils {
         // plain getList should work
         assertEquals(Seq(intValue(1), intValue(2), intValue(3)), conf.getList("arrays.ofInt").asScala)
         assertEquals(Seq(stringValue("a"), stringValue("b"), stringValue("c")), conf.getList("arrays.ofString").asScala)
+
+        // make sure floats starting with a '.' are parsed as strings (they will be converted to double on demand)
+        assertEquals(ConfigValueType.STRING, conf.getValue("floats.pointThirtyThree").valueType())
     }
 
     @Test
@@ -645,6 +640,10 @@ class ConfigTest extends TestUtils {
             conf.getBytes("nulls.null")
         }
 
+        intercept[ConfigException.Null] {
+            conf.getMemorySize("nulls.null")
+        }
+
         // should throw WrongType if key is wrong type and not convertible
         intercept[ConfigException.WrongType] {
             conf.getInt("booleans.trueAgain")
@@ -674,6 +673,10 @@ class ConfigTest extends TestUtils {
             conf.getBytes("ints")
         }
 
+        intercept[ConfigException.WrongType] {
+            conf.getMemorySize("ints")
+        }
+
         // should throw BadPath on various bad paths
         intercept[ConfigException.BadPath] {
             conf.getInt(".bad")
@@ -700,6 +703,10 @@ class ConfigTest extends TestUtils {
         intercept[ConfigException.BadValue] {
             conf.getBytes("strings.a")
         }
+
+        intercept[ConfigException.BadValue] {
+            conf.getMemorySize("strings.a")
+        }
     }
 
     @Test
@@ -709,10 +716,12 @@ class ConfigTest extends TestUtils {
         // should convert numbers to string
         assertEquals("42", conf.getString("ints.fortyTwo"))
         assertEquals("42.1", conf.getString("floats.fortyTwoPointOne"))
+        assertEquals(".33", conf.getString("floats.pointThirtyThree"))
 
         // should convert string to number
         assertEquals(57, conf.getInt("strings.number"))
         assertEquals(3.14, conf.getDouble("strings.double"), 1e-6)
+        assertEquals(0.33, conf.getDouble("strings.doubleStartingWithDot"), 1e-6)
 
         // should convert strings to boolean
         assertEquals(true, conf.getBoolean("strings.true"))
@@ -757,6 +766,17 @@ class ConfigTest extends TestUtils {
             conf.getNanosecondsList("durations.secondsList").asScala)
         assertEquals(500L, conf.getMilliseconds("durations.halfSecond"))
 
+        // get durations as java.time.Duration
+        assertEquals(1000L, conf.getDuration("durations.second").toMillis)
+        assertEquals(asNanos(1), conf.getDuration("durations.second").toNanos)
+        assertEquals(1000L, conf.getDuration("durations.secondAsNumber").toMillis)
+        assertEquals(asNanos(1), conf.getDuration("durations.secondAsNumber").toNanos)
+        assertEquals(Seq(1000L, 2000L, 3000L, 4000L),
+            conf.getDurationList("durations.secondsList").asScala.map(_.toMillis))
+        assertEquals(Seq(asNanos(1), asNanos(2), asNanos(3), asNanos(4)),
+            conf.getDurationList("durations.secondsList").asScala.map(_.toNanos))
+        assertEquals(500L, conf.getDuration("durations.halfSecond").toMillis)
+
         def assertDurationAsTimeUnit(unit: TimeUnit): Unit = {
             def ms2unit(l: Long) = unit.convert(l, MILLISECONDS)
             def s2unit(i: Int) = unit.convert(i, SECONDS)
@@ -787,6 +807,13 @@ class ConfigTest extends TestUtils {
         assertEquals(Seq(1024 * 1024L, 1024 * 1024L, 1024L * 1024L),
             conf.getBytesList("memsizes.megsList").asScala)
         assertEquals(512 * 1024L, conf.getBytes("memsizes.halfMeg"))
+
+        // should get size as a ConfigMemorySize
+        assertEquals(1024 * 1024L, conf.getMemorySize("memsizes.meg").toBytes)
+        assertEquals(1024 * 1024L, conf.getMemorySize("memsizes.megAsNumber").toBytes)
+        assertEquals(Seq(1024 * 1024L, 1024 * 1024L, 1024L * 1024L),
+            conf.getMemorySizeList("memsizes.megsList").asScala.map(_.toBytes))
+        assertEquals(512 * 1024L, conf.getMemorySize("memsizes.halfMeg").toBytes)
     }
 
     @Test
@@ -830,18 +857,27 @@ class ConfigTest extends TestUtils {
         val conf = ConfigFactory.load("test01")
 
         val o1 = conf.getValue("ints.fortyTwo").origin()
-        assertEquals("test01.conf: 3", o1.description)
+        // the checkout directory would be in between this startsWith and endsWith
+        assertTrue("description starts with resource '" + o1.description + "'", o1.description.startsWith("test01.conf @"))
+        assertTrue("description ends with url and line '" + o1.description + "'", o1.description.endsWith("/config/target/test-classes/test01.conf: 3"))
         assertEquals("test01.conf", o1.resource)
+        assertTrue("url ends with resource file", o1.url.getPath.endsWith("/config/target/test-classes/test01.conf"))
         assertEquals(3, o1.lineNumber)
 
         val o2 = conf.getValue("fromJson1").origin()
-        assertEquals("test01.json: 2", o2.description)
+        // the checkout directory would be in between this startsWith and endsWith
+        assertTrue("description starts with json resource '" + o2.description + "'", o2.description.startsWith("test01.json @"))
+        assertTrue("description of json resource ends with url and line '" + o2.description + "'", o2.description.endsWith("/config/target/test-classes/test01.json: 2"))
         assertEquals("test01.json", o2.resource)
+        assertTrue("url ends with json resource file", o2.url.getPath.endsWith("/config/target/test-classes/test01.json"))
         assertEquals(2, o2.lineNumber)
 
         val o3 = conf.getValue("fromProps.bool").origin()
-        assertEquals("test01.properties", o3.description)
+        // the checkout directory would be in between this startsWith and endsWith
+        assertTrue("description starts with props resource '" + o3.description + "'", o3.description.startsWith("test01.properties @"))
+        assertTrue("description of props resource ends with url '" + o3.description + "'", o3.description.endsWith("/config/target/test-classes/test01.properties"))
         assertEquals("test01.properties", o3.resource)
+        assertTrue("url ends with props resource file", o3.url.getPath.endsWith("/config/target/test-classes/test01.properties"))
         // we don't have line numbers for properties files
         assertEquals(-1, o3.lineNumber)
     }

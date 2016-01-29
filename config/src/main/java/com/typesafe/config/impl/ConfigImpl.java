@@ -6,6 +6,7 @@ package com.typesafe.config.impl;
 import java.io.File;
 import java.lang.ref.WeakReference;
 import java.net.URL;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -18,6 +19,7 @@ import java.util.concurrent.Callable;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigException;
 import com.typesafe.config.ConfigIncluder;
+import com.typesafe.config.ConfigMemorySize;
 import com.typesafe.config.ConfigObject;
 import com.typesafe.config.ConfigOrigin;
 import com.typesafe.config.ConfigParseOptions;
@@ -25,7 +27,10 @@ import com.typesafe.config.ConfigParseable;
 import com.typesafe.config.ConfigValue;
 import com.typesafe.config.impl.SimpleIncluder.NameSource;
 
-/** This is public but is only supposed to be used by the "config" package */
+/**
+ * Internal implementation detail, not ABI stable, do not touch.
+ * For use only by the {@link com.typesafe.config} package.
+ */
 public class ConfigImpl {
 
     private static class LoaderCache {
@@ -76,7 +81,6 @@ public class ConfigImpl {
         static final LoaderCache cache = new LoaderCache();
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static Config computeCachedConfig(ClassLoader loader, String key,
             Callable<Config> updater) {
         LoaderCache cache;
@@ -116,21 +120,18 @@ public class ConfigImpl {
         }
     };
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static ConfigObject parseResourcesAnySyntax(Class<?> klass, String resourceBasename,
             ConfigParseOptions baseOptions) {
         NameSource source = new ClasspathNameSourceWithClass(klass);
         return SimpleIncluder.fromBasename(source, resourceBasename, baseOptions);
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static ConfigObject parseResourcesAnySyntax(String resourceBasename,
             ConfigParseOptions baseOptions) {
         NameSource source = new ClasspathNameSource();
         return SimpleIncluder.fromBasename(source, resourceBasename, baseOptions);
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static ConfigObject parseFileAnySyntax(File basename, ConfigParseOptions baseOptions) {
         NameSource source = new FileNameSource();
         return SimpleIncluder.fromBasename(source, basename.getPath(), baseOptions);
@@ -142,7 +143,6 @@ public class ConfigImpl {
         return emptyObject(origin);
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static Config emptyConfig(String originDescription) {
         return emptyObject(originDescription).toConfig();
     }
@@ -189,13 +189,11 @@ public class ConfigImpl {
             return SimpleConfigOrigin.newSimple(originDescription);
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static ConfigValue fromAnyRef(Object object, String originDescription) {
         ConfigOrigin origin = valueOrigin(originDescription);
         return fromAnyRef(object, origin, FromMapMode.KEYS_ARE_KEYS);
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static ConfigObject fromPathMap(
             Map<String, ? extends Object> pathMap, String originDescription) {
         ConfigOrigin origin = valueOrigin(originDescription);
@@ -214,6 +212,8 @@ public class ConfigImpl {
                 return new ConfigNull(origin);
             else
                 return defaultNullValue;
+        } else if(object instanceof AbstractConfigValue) {
+            return (AbstractConfigValue) object;
         } else if (object instanceof Boolean) {
             if (origin != defaultValueOrigin) {
                 return new ConfigBoolean(origin, (Boolean) object);
@@ -223,7 +223,7 @@ public class ConfigImpl {
                 return defaultFalseValue;
             }
         } else if (object instanceof String) {
-            return new ConfigString(origin, (String) object);
+            return new ConfigString.Quoted(origin, (String) object);
         } else if (object instanceof Number) {
             // here we always keep the same type that was passed to us,
             // rather than figuring out if a Long would fit in an Int
@@ -240,6 +240,8 @@ public class ConfigImpl {
                 return ConfigNumber.newNumber(origin,
                         ((Number) object).doubleValue(), null);
             }
+        } else if (object instanceof Duration) {
+            return new ConfigLong(origin, ((Duration) object).toMillis(), null);
         } else if (object instanceof Map) {
             if (((Map<?, ?>) object).isEmpty())
                 return emptyObject(origin);
@@ -273,6 +275,8 @@ public class ConfigImpl {
             }
 
             return new SimpleConfigList(origin, values);
+        } else if (object instanceof ConfigMemorySize) {
+            return new ConfigLong(origin, ((ConfigMemorySize) object).toBytes(), null);
         } else {
             throw new ConfigException.BugOrBroken(
                     "bug in method caller: not valid to create ConfigValue from: "
@@ -320,12 +324,10 @@ public class ConfigImpl {
         }
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static Config systemPropertiesAsConfig() {
         return systemPropertiesAsConfigObject().toConfig();
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static void reloadSystemPropertiesConfig() {
         // ConfigFactory.invalidateCaches() relies on this having the side
         // effect that it drops all caches
@@ -338,7 +340,7 @@ public class ConfigImpl {
         for (Map.Entry<String, String> entry : env.entrySet()) {
             String key = entry.getKey();
             m.put(key,
-                    new ConfigString(SimpleConfigOrigin.newSimple("env var " + key), entry
+                    new ConfigString.Quoted(SimpleConfigOrigin.newSimple("env var " + key), entry
                             .getValue()));
         }
         return new SimpleConfigObject(SimpleConfigOrigin.newSimple("env variables"),
@@ -357,12 +359,10 @@ public class ConfigImpl {
         }
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static Config envVariablesAsConfig() {
         return envVariablesAsConfigObject().toConfig();
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static Config defaultReference(final ClassLoader loader) {
         return computeCachedConfig(loader, "defaultReference", new Callable<Config>() {
             @Override
@@ -419,7 +419,6 @@ public class ConfigImpl {
         }
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static boolean traceLoadsEnabled() {
         try {
             return DebugHolder.traceLoadsEnabled();
@@ -462,8 +461,7 @@ public class ConfigImpl {
         else
             return new ConfigException.NotResolved(newMessage, original);
     }
-    
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
+
     public static ConfigOrigin newSimpleOrigin(String description) {
         if (description == null) {
             return defaultValueOrigin;
@@ -472,14 +470,11 @@ public class ConfigImpl {
         }
     }
 
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
     public static ConfigOrigin newFileOrigin(String filename) {
         return SimpleConfigOrigin.newFile(filename);
     }
-    
-    /** For use ONLY by library internals, DO NOT TOUCH not guaranteed ABI */
+
     public static ConfigOrigin newURLOrigin(URL url) {
         return SimpleConfigOrigin.newURL(url);
     }
-    
 }
